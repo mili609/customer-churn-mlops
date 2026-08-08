@@ -30,5 +30,6 @@ Thumbs.db
 
 # Python cache
 .pytest_cache/
-# Data
-data/
+#data
+data/raw/*.csv
+data/processed/*.csv
