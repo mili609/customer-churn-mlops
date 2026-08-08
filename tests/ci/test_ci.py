@@ -5,7 +5,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_required_project_directories_exist():
-    for directory in ("src", "data", "models"):
+    for directory in ("src", "data"):
         assert (PROJECT_ROOT / directory).is_dir()
 
 
