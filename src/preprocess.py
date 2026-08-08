@@ -1,5 +1,7 @@
 import os
+from pathlib import Path
 
+import joblib
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
@@ -12,6 +14,7 @@ TESTING_PATH = "data/raw/customer_churn_dataset-testing-master.csv"
 PROCESSED_DIR = "data/processed"
 PROCESSED_TRAIN_PATH = os.path.join(PROCESSED_DIR, "training_processed.csv")
 PROCESSED_TEST_PATH = os.path.join(PROCESSED_DIR, "testing_processed.csv")
+PREPROCESSOR_PATH = os.path.join("models", "preprocessor.pkl")
 TARGET = "Churn"
 ID_COLUMN = "CustomerID"
 
@@ -64,6 +67,12 @@ def preprocess_datasets(
     return train_processed, test_processed, preprocessor
 
 
+def save_preprocessor(preprocessor: ColumnTransformer, path: str = PREPROCESSOR_PATH) -> None:
+    """Persist the fitted transformer needed for reproducible batch prediction."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(preprocessor, path)
+
+
 def main() -> None:
     train_df = pd.read_csv(TRAINING_PATH)
     test_df = pd.read_csv(TESTING_PATH)
@@ -79,12 +88,14 @@ def main() -> None:
     os.makedirs(PROCESSED_DIR, exist_ok=True)
     train_processed.to_csv(PROCESSED_TRAIN_PATH, index=False)
     test_processed.to_csv(PROCESSED_TEST_PATH, index=False)
+    save_preprocessor(preprocessor)
 
     print("\nPreprocessing completed successfully!")
     print("Processed training shape:", train_processed.shape)
     print("Processed testing shape:", test_processed.shape)
     print("\nSaved training data to:", PROCESSED_TRAIN_PATH)
     print("Saved testing data to:", PROCESSED_TEST_PATH)
+    print("Saved fitted preprocessor to:", PREPROCESSOR_PATH)
 
 
 if __name__ == "__main__":

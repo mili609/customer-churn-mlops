@@ -1,243 +1,139 @@
-import os
+"""Train and compare churn models using reproducible validation and test splits."""
+
+import json
+from pathlib import Path
+from typing import Any
+
 import joblib
-import pandas as pd
 import mlflow
 import mlflow.sklearn
-
-from sklearn.model_selection import train_test_split
+import pandas as pd
+from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, HistGradientBoostingClassifier
-from sklearn.metrics import (
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score
-)
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
-
-# --------------------------------------------------
-# 1. Paths
-# --------------------------------------------------
 
 TRAIN_PATH = "data/processed/training_processed.csv"
 TEST_PATH = "data/processed/testing_processed.csv"
-
-MODEL_DIR = "models"
-
-os.makedirs(MODEL_DIR, exist_ok=True)
-
-
-# --------------------------------------------------
-# 2. Load processed data
-# --------------------------------------------------
-
-train_df = pd.read_csv(TRAIN_PATH)
-test_df = pd.read_csv(TEST_PATH)
-
+MODEL_PATH = "models/best_model.pkl"
 TARGET = "Churn"
-
-X = train_df.drop(columns=[TARGET])
-y = train_df[TARGET]
-
-X_test = test_df.drop(columns=[TARGET])
-y_test = test_df[TARGET]
-
-print("Training data:", X.shape)
-print("Testing data:", X_test.shape)
+EXPERIMENT_NAME = "customer-churn-prediction"
+RANDOM_STATE = 42
 
 
-# --------------------------------------------------
-# 3. Train-validation split
-# --------------------------------------------------
-
-X_train, X_val, y_train, y_val = train_test_split(
-    X,
-    y,
-    test_size=0.20,
-    random_state=42,
-    stratify=y
-)
-
-print("Training split:", X_train.shape)
-print("Validation split:", X_val.shape)
-
-
-# --------------------------------------------------
-# 4. Define models
-# --------------------------------------------------
-
-models = {
-    "Logistic Regression": LogisticRegression(
-        max_iter=1000,
-        random_state=42
-    ),
-
-    "Random Forest": RandomForestClassifier(
-        n_estimators=100,
-        random_state=42,
-        n_jobs=-1
-    ),
-
-    "HistGradient Boosting": HistGradientBoostingClassifier(
-        max_iter=100,
-        random_state=42
-    )
-}
-
-
-# --------------------------------------------------
-# 5. MLflow experiment
-# --------------------------------------------------
-
-mlflow.set_experiment("customer-churn-prediction")
-
-
-# --------------------------------------------------
-# 6. Train and evaluate models
-# --------------------------------------------------
-
-results = {}
-
-for model_name, model in models.items():
-
-    print("\n" + "=" * 60)
-    print(f"Training: {model_name}")
-    print("=" * 60)
-
-    with mlflow.start_run(run_name=model_name):
-
-        # Train
-        model.fit(X_train, y_train)
-
-        # Validation prediction
-        y_pred = model.predict(X_val)
-
-        # Metrics
-        accuracy = accuracy_score(y_val, y_pred)
-        precision = precision_score(y_val, y_pred, zero_division=0)
-        recall = recall_score(y_val, y_pred, zero_division=0)
-        f1 = f1_score(y_val, y_pred, zero_division=0)
-
-        print(f"Accuracy:  {accuracy:.4f}")
-        print(f"Precision: {precision:.4f}")
-        print(f"Recall:    {recall:.4f}")
-        print(f"F1 Score:  {f1:.4f}")
-
-        # Log parameters
-        mlflow.log_param("model_name", model_name)
-
-        # Log metrics
-        mlflow.log_metric("validation_accuracy", accuracy)
-        mlflow.log_metric("validation_precision", precision)
-        mlflow.log_metric("validation_recall", recall)
-        mlflow.log_metric("validation_f1", f1)
-
-        # Log model
-        mlflow.sklearn.log_model(
-            model,
-            artifact_path="model"
-        )
-
-        results[model_name] = {
-            "model": model,
-            "accuracy": accuracy,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1
-        }
-
-
-# --------------------------------------------------
-# 7. Select best model
-# --------------------------------------------------
-
-best_model_name = max(
-    results,
-    key=lambda name: results[name]["f1"]
-)
-
-best_model = results[best_model_name]["model"]
-
-print("\n" + "=" * 60)
-print("BEST MODEL")
-print("=" * 60)
-
-print("Model:", best_model_name)
-print("Validation F1:", results[best_model_name]["f1"])
-
-
-# --------------------------------------------------
-# 8. Evaluate ALL models on final test data
-# --------------------------------------------------
-
-print("\n" + "=" * 60)
-print("FINAL TEST RESULTS - ALL MODELS")
-print("=" * 60)
-
-test_results = {}
-
-for model_name, result in results.items():
-
-    model = result["model"]
-
-    predictions = model.predict(X_test)
-
-    accuracy = accuracy_score(
-        y_test,
-        predictions
-    )
-
-    precision = precision_score(
-        y_test,
-        predictions,
-        zero_division=0
-    )
-
-    recall = recall_score(
-        y_test,
-        predictions,
-        zero_division=0
-    )
-
-    f1 = f1_score(
-        y_test,
-        predictions,
-        zero_division=0
-    )
-
-    test_results[model_name] = {
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1
+def build_models() -> dict[str, Any]:
+    """Return the project's explicitly configured candidate models."""
+    return {
+        "Logistic Regression": Pipeline(
+            steps=[
+                ("scaler", StandardScaler()),
+                ("classifier", LogisticRegression(max_iter=1000, random_state=RANDOM_STATE)),
+            ]
+        ),
+        "Random Forest": RandomForestClassifier(
+            n_estimators=100, random_state=RANDOM_STATE, n_jobs=-1
+        ),
+        "HistGradient Boosting": HistGradientBoostingClassifier(
+            max_iter=100, random_state=RANDOM_STATE
+        ),
     }
 
-    print("\n" + "-" * 50)
-    print(model_name)
 
-    print(f"Accuracy:  {accuracy:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall:    {recall:.4f}")
-    print(f"F1 Score:  {f1:.4f}")
+def classification_metrics(y_true: pd.Series, predictions: Any) -> dict[str, float]:
+    """Calculate the common binary-classification metrics used by this project."""
+    return {
+        "accuracy": accuracy_score(y_true, predictions),
+        "precision": precision_score(y_true, predictions, zero_division=0),
+        "recall": recall_score(y_true, predictions, zero_division=0),
+        "f1": f1_score(y_true, predictions, zero_division=0),
+    }
 
 
-# --------------------------------------------------
-# 9. Save validation-selected model
-# --------------------------------------------------
+def _mlflow_parameters(model_name: str, model: Any) -> dict[str, str]:
+    parameters = {
+        "model_name": model_name,
+        "random_state": str(RANDOM_STATE),
+        "preprocessing": json.dumps(
+            {
+                "id_column_removed": "CustomerID",
+                "numeric_imputer": "median",
+                "categorical_imputer": "most_frequent",
+                "categorical_encoder": "one_hot_handle_unknown_ignore",
+            },
+            sort_keys=True,
+        ),
+    }
+    parameters.update({f"model__{key}": str(value) for key, value in model.get_params().items()})
+    return parameters
 
-best_model_path = os.path.join(
-    MODEL_DIR,
-    "best_model.pkl"
-)
 
-joblib.dump(
-    best_model,
-    best_model_path
-)
+def train_and_evaluate(
+    train_df: pd.DataFrame, test_df: pd.DataFrame, log_to_mlflow: bool = True
+) -> tuple[str, Any, dict[str, dict[str, dict[str, float]]]]:
+    """Fit candidates, select by validation F1 only, and evaluate once on test data."""
+    X = train_df.drop(columns=[TARGET])
+    y = train_df[TARGET]
+    X_test = test_df.drop(columns=[TARGET])
+    y_test = test_df[TARGET]
+    X_train, X_val, y_train, y_val = train_test_split(
+        X, y, test_size=0.20, random_state=RANDOM_STATE, stratify=y
+    )
 
-print("\n" + "=" * 60)
-print("MODEL SAVED")
-print("=" * 60)
+    if log_to_mlflow:
+        mlflow.set_experiment(EXPERIMENT_NAME)
 
-print("Validation-selected model:", best_model_name)
-print("Saved to:", best_model_path)
+    results: dict[str, dict[str, dict[str, float]]] = {}
+    fitted_models: dict[str, Any] = {}
+    for model_name, model in build_models().items():
+        if log_to_mlflow:
+            run_context = mlflow.start_run(run_name=model_name)
+        else:
+            run_context = None
+
+        try:
+            if run_context:
+                run_context.__enter__()
+                mlflow.log_params(_mlflow_parameters(model_name, model))
+
+            model.fit(X_train, y_train)
+            validation_metrics = classification_metrics(y_val, model.predict(X_val))
+            test_metrics = classification_metrics(y_test, model.predict(X_test))
+            if run_context:
+                mlflow.log_metrics(
+                    {f"validation_{name}": value for name, value in validation_metrics.items()}
+                )
+                mlflow.log_metrics({f"test_{name}": value for name, value in test_metrics.items()})
+                mlflow.sklearn.log_model(sk_model=model, name="model")
+
+            results[model_name] = {"validation": validation_metrics, "test": test_metrics}
+            fitted_models[model_name] = model
+        finally:
+            if run_context:
+                run_context.__exit__(None, None, None)
+
+    best_model_name = max(results, key=lambda name: results[name]["validation"]["f1"])
+    return best_model_name, fitted_models[best_model_name], results
+
+
+def main() -> None:
+    train_df = pd.read_csv(TRAIN_PATH)
+    test_df = pd.read_csv(TEST_PATH)
+    best_model_name, best_model, results = train_and_evaluate(train_df, test_df)
+
+    print("\nMODEL RESULTS")
+    for model_name, metrics in results.items():
+        print(f"\n{model_name}")
+        for split, split_metrics in metrics.items():
+            print(f"{split.title()}: {split_metrics}")
+
+    Path(MODEL_PATH).parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(best_model, MODEL_PATH)
+    print(f"\nValidation-selected model: {best_model_name}")
+    print(f"Saved to: {MODEL_PATH}")
+
+
+if __name__ == "__main__":
+    main()

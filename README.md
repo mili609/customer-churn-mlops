@@ -120,7 +120,7 @@ The module also exposes `build_preprocessor()` and `preprocess_datasets()` so th
 
 `src/train.py` reads the processed datasets, creates a stratified 80/20 train-validation split of the processed training data (`random_state=42`), and trains:
 
-- Logistic Regression (`max_iter=1000`)
+- Logistic Regression with `StandardScaler` (`max_iter=1000`)
 - Random Forest (`n_estimators=100`, `n_jobs=-1`)
 - HistGradient Boosting (`max_iter=100`)
 
@@ -143,13 +143,15 @@ This train/test distribution shift explains why very strong validation metrics d
 
 ### Final results
 
-The validation metrics below are the latest metrics recorded in local MLflow runs. The final-test row was calculated by scoring the locally saved `models/best_model.pkl` against the processed testing file. The current training script prints final-test metrics for all models but does not log those metrics to MLflow; therefore final-test values for the two non-selected models are not claimed here.
+The metrics below are from the latest local training run. The training script logs validation and final-test metrics for every candidate model. The best model is selected strictly by validation F1, not by final-test performance.
 
 | Model | Evaluation split | Accuracy | Precision | Recall | F1 |
 |---|---|---:|---:|---:|---:|
-| Logistic Regression | Validation | 0.8933 | 0.9232 | 0.8854 | 0.9039 |
+| Logistic Regression | Validation | 0.8934 | 0.9233 | 0.8855 | 0.9040 |
+| Logistic Regression | Final test | 0.5711 | 0.5251 | 0.9906 | 0.6864 |
 | Random Forest | Validation | 0.9993 | 0.9999 | 0.9988 | 0.9993 |
-| HistGradient Boosting | Validation | 0.9999 | 1.0000 | 0.9998 | 0.9999 |
+| Random Forest | Final test | 0.5041 | 0.4885 | 0.9987 | 0.6561 |
+| HistGradient Boosting (saved best model) | Validation | 0.9999 | 1.0000 | 0.9998 | 0.9999 |
 | HistGradient Boosting (saved best model) | Final test | 0.5034 | 0.4882 | 0.9988 | 0.6558 |
 
 ## DVC data tracking
@@ -178,8 +180,8 @@ Useful Windows commands:
 
 Training uses the `customer-churn-prediction` experiment. Each model run records:
 
-- Parameter: `model_name`
-- Metrics: `validation_accuracy`, `validation_precision`, `validation_recall`, and `validation_f1`
+- Parameters: `model_name`, random seed, preprocessing configuration, and estimator hyperparameters
+- Metrics: validation and final-test accuracy, precision, recall, and F1
 - Artifact: the trained scikit-learn model via `mlflow.sklearn.log_model()`
 
 The local workspace currently contains `mlflow.db` and `mlruns/`, both Git-ignored generated state. Start the UI locally with:
@@ -194,7 +196,7 @@ MLflow is used during local training only; the CI workflow does not start MLflow
 
 `pytest.ini` sets `testpaths = tests`, preventing analysis scripts such as `src/compare_train_test.py` from being collected as tests.
 
-- `tests/test_pipeline.py` uses small synthetic DataFrames to test median imputation, categorical encoding, unknown-category handling, target retention, and prediction output shape.
+- `tests/test_pipeline.py` uses small synthetic DataFrames to test median imputation, categorical encoding, unknown-category handling, target retention, prediction probabilities/risk labels, and batch-evaluation metrics.
 - `tests/ci/test_ci.py` verifies tracked repository structure, `requirements.txt`, and the two DVC metadata files. It does not require DVC data, processed datasets, models, MLflow, or network access.
 
 The GitHub Actions workflow at `.github/workflows/ci.yml` runs on pushes and pull requests. It uses Python 3.13, installs `requirements.txt` and pytest, then runs `python -m pytest`. It does not run `src/train.py`, download DVC data, start MLflow, or require model artifacts.
@@ -262,3 +264,38 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
    ```
 
 Git and GitHub should version source code, tests, workflow files, DVC metadata, and documentation. Generated artifacts such as raw/processed CSV contents, `models/`, `mlflow.db`, and `mlruns/` intentionally remain outside Git. The current implementation does not include Docker, an API service, cloud deployment, or monitoring dashboards.
+
+## Batch monitoring and high-risk prediction
+
+`src/monitor.py` provides offline batch monitoring rather than real-time production monitoring. It loads the validation-selected model, evaluates a **processed, labelled** CSV, calculates accuracy, precision, recall, and F1, and creates an MLflow `batch-evaluation` run. If a prior evaluation run exists, it additionally logs the F1 change from that run.
+
+```powershell
+python src\monitor.py --data data\processed\testing_processed.csv
+```
+
+Add `--no-log` to calculate metrics without creating an MLflow run. Repeated evaluation of newly labelled batches provides a lightweight performance-over-time workflow; it does not replace production alerting or drift detection.
+
+`src/predict.py` supports offline batch scoring of raw customer data. Preprocessing saves `models/preprocessor.pkl`; training saves `models/best_model.pkl`. The prediction command loads both artifacts and writes `churn_prediction`, `churn_probability`, and `risk_level`:
+
+```powershell
+python src\predict.py --input data\new_customers.csv --output data\predictions.csv
+```
+
+Risk labels are `Low` for probabilities below 0.40, `Medium` for 0.40–<0.70, and `High` for 0.70 or above. The input must contain the same raw feature columns used during preprocessing. `CustomerID` is retained in output when supplied and `Churn` may be omitted.
+
+## Completing shared DVC storage
+
+Raw datasets remain DVC-managed and are not committed to Git. The repository currently has DVC metadata but no configured remote. A project maintainer must provide an approved shared endpoint and provider credentials outside Git. For example, after standard S3 authentication is configured locally:
+
+```powershell
+.\.venv\Scripts\dvc.exe remote add -d storage s3://<organisation-bucket>/customer-churn-mlops
+.\.venv\Scripts\dvc.exe push
+```
+
+Replace the placeholder with the approved endpoint. Do not commit access keys, tokens, or a personal filesystem path. Once the reviewed `.dvc/config` remote entry is committed, developers can run `dvc pull` after cloning. This endpoint/credential setup is the remaining manual infrastructure step.
+
+## Known limitations and future improvements
+
+- The observed train/test distribution shift materially reduces held-out performance; investigate data provenance, time-aware validation, feature stability, and calibration before operational use.
+- Monitoring is labelled batch evaluation, not real-time monitoring, automated alerting, or drift detection.
+- There is no Docker image, API service, cloud deployment, Kubernetes configuration, or monitoring dashboard.
